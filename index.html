@@ -52,10 +52,48 @@
   <button id="rebuildBtn">Rebuild workbook</button>
 
 <script>
-const GREEN_FILL='FFE2EFDA', GREEN_FONT='FF375623';
-const RED_FILL='FFFCE4D6', RED_FONT='FFC00000';
-const YELLOW_FILL='FFFFF2CC', YELLOW_FONT='FF7F6000';
-const HEADER_BLUE='FF1F3864';
+// ---- corporate design system (presentation only — no calculation/logic changes) ----
+const NAVY = 'FF17375E';        // primary header / banner
+const BLUE = 'FF2F75B5';        // secondary
+const ACCENT = 'FF5B9BD5';      // accent
+const SUCCESS_FILL = 'FFE6F2E2', SUCCESS_FONT = 'FF2E7D32';   // ahead / above LY
+const NEGATIVE_FILL = 'FFFBE4E4', NEGATIVE_FONT = 'FFC00000'; // behind / below LY
+const WARNING_FILL = 'FFFFF6DE', WARNING_FONT = 'FF7F6000';   // on-track / NEW
+const LIGHT_GRAY = 'FFF3F5F7';  // zebra banding
+const GRID = 'FFD9D9D9';        // subtle border
+const DARK_TEXT = 'FF333333';
+
+// kept as aliases so existing references below still resolve to the new palette
+const GREEN_FILL = SUCCESS_FILL, GREEN_FONT = SUCCESS_FONT;
+const RED_FILL = NEGATIVE_FILL, RED_FONT = NEGATIVE_FONT;
+const YELLOW_FILL = WARNING_FILL, YELLOW_FONT = WARNING_FONT;
+const HEADER_BLUE = NAVY;
+
+const FONT_NAME = 'Calibri'; // Excel-safe; renders consistently across Win/Mac/Online/LibreOffice
+const THIN_GRID_BORDER = { top: { style: 'thin', color: { argb: GRID } }, bottom: { style: 'thin', color: { argb: GRID } }, left: { style: 'thin', color: { argb: GRID } }, right: { style: 'thin', color: { argb: GRID } } };
+
+function headerStyle(cell, size) {
+  cell.font = { name: FONT_NAME, bold: true, size: size || 12, color: { argb: 'FFFFFFFF' } };
+  cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
+  cell.alignment = { wrapText: true, horizontal: 'center', vertical: 'middle' };
+  cell.border = THIN_GRID_BORDER;
+}
+function dataStyle(cell, opts) {
+  opts = opts || {};
+  cell.font = { name: FONT_NAME, size: 10.5, color: { argb: DARK_TEXT }, bold: !!opts.bold };
+  cell.alignment = { horizontal: opts.align || 'left', vertical: 'middle' };
+  cell.border = THIN_GRID_BORDER;
+  if (opts.numFmt) cell.numFmt = opts.numFmt;
+  if (opts.zebra) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: LIGHT_GRAY } };
+}
+function totalStyle(cell) {
+  cell.font = { name: FONT_NAME, bold: true, size: 10.5, color: { argb: 'FFFFFFFF' } };
+  cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
+  cell.border = THIN_GRID_BORDER;
+}
+const NUM_CASES = '#,##0.00';
+const NUM_PCT = '0.0%';
+const NUM_INT = '#,##0';
 
 document.getElementById('monthLabel').value = (() => {
   const d = new Date();
@@ -149,48 +187,65 @@ async function buildWorkbook(data, daysElapsed, totalDays, monthLabel) {
 
   // ---------------- Raw Data ----------------
   wsRaw.getCell('A1').value = '⬇  PASTE YOUR NEW DATA HERE  —  Delete rows 3 onward, paste Values Only starting at A3';
-  wsRaw.getCell('A1').font = { bold: true, color: { argb: 'FFB45F06' } };
+  wsRaw.getCell('A1').font = { name: FONT_NAME, bold: true, color: { argb: 'FFB45F06' } };
   const rawHeaders = ['Month', 'Chain', 'Brand', 'Metrics', 'LY Cases', 'TY Cases', 'Variance'];
-  rawHeaders.forEach((h, i) => { const c = wsRaw.getCell(2, i + 1); c.value = h; c.font = { bold: true }; });
+  rawHeaders.forEach((h, i) => { const c = wsRaw.getCell(2, i + 1); c.value = h; headerStyle(c, 11); });
 
   const rawRowMap = {};
   let r = 3;
   for (const chain of chains) {
     for (const brand of Object.keys(data[chain]).sort()) {
       const { ly, ty } = data[chain][brand];
-      wsRaw.getCell(r, 1).value = monthLabel;
-      wsRaw.getCell(r, 2).value = chain;
-      wsRaw.getCell(r, 3).value = brand;
-      wsRaw.getCell(r, 5).value = ly;
-      wsRaw.getCell(r, 6).value = ty;
-      wsRaw.getCell(r, 7).value = Math.round((ty - ly) * 10000) / 10000;
+      const zebra = (r % 2 === 0);
+      wsRaw.getCell(r, 1).value = monthLabel; dataStyle(wsRaw.getCell(r, 1), { align: 'center', zebra });
+      wsRaw.getCell(r, 2).value = chain; dataStyle(wsRaw.getCell(r, 2), { align: 'left', zebra });
+      wsRaw.getCell(r, 3).value = brand; dataStyle(wsRaw.getCell(r, 3), { align: 'left', zebra });
+      dataStyle(wsRaw.getCell(r, 4), { align: 'left', zebra });
+      wsRaw.getCell(r, 5).value = ly; dataStyle(wsRaw.getCell(r, 5), { align: 'right', zebra, numFmt: NUM_CASES });
+      wsRaw.getCell(r, 6).value = ty; dataStyle(wsRaw.getCell(r, 6), { align: 'right', zebra, numFmt: NUM_CASES });
+      wsRaw.getCell(r, 7).value = Math.round((ty - ly) * 10000) / 10000; dataStyle(wsRaw.getCell(r, 7), { align: 'right', zebra, numFmt: NUM_CASES });
       rawRowMap[chain + '|' + brand] = r;
       r++;
     }
   }
   [['A',10],['B',22],['C',26],['D',10],['E',10],['F',10],['G',10]].forEach(([col,w]) => wsRaw.getColumn(col).width = w);
+  wsRaw.views = [{ state: 'frozen', ySplit: 2 }];
+  if (r > 3) wsRaw.autoFilter = { from: 'A2', to: 'G' + (r - 1) };
+  wsRaw.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, printTitlesRow: '2:2', margins: { left: 0.4, right: 0.4, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 } };
+  wsRaw.headerFooter = { oddFooter: '&LGenerated ' + new Date().toLocaleString() + '&CGainers & Drainers — Raw Data&RPage &P of &N' };
 
   // ---------------- Sales Trend Analysis ----------------
   wsSta.getCell('A1').value = 'Sales Trend Analysis — Straight-Line Projection';
-  wsSta.getCell('A1').font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 14 };
-  wsSta.getCell('A1').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEADER_BLUE } };
+  wsSta.getCell('A1').font = { name: FONT_NAME, bold: true, color: { argb: 'FFFFFFFF' }, size: 14 };
+  wsSta.getCell('A1').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
+  wsSta.getCell('A1').alignment = { vertical: 'middle' };
   wsSta.mergeCells('A1:M1');
+  wsSta.getRow(1).height = 22;
 
   const today = new Date();
   const todayStr = today.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
   wsSta.getCell('A2').value = 'Month: ' + monthLabel + '   |   Business Days Elapsed: ' + daysElapsed + ' of ' + totalDays + '   |   Today: ' + todayStr;
+  wsSta.getCell('A2').font = { name: FONT_NAME, size: 10.5, color: { argb: DARK_TEXT } };
   wsSta.mergeCells('A2:M2');
   wsSta.mergeCells('A3:M3');
 
   wsSta.getCell('A4').value = '⚙  UPDATE HERE EACH WEEK →';
+  wsSta.getCell('A4').font = { name: FONT_NAME, bold: true, size: 10.5 };
   wsSta.mergeCells('A4:C4');
   wsSta.getCell('D4').value = daysElapsed;
-  wsSta.getCell('D4').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: YELLOW_FILL } };
+  wsSta.getCell('D4').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFC000' } };
+  wsSta.getCell('D4').font = { name: FONT_NAME, bold: true };
+  wsSta.getCell('D4').alignment = { horizontal: 'center' };
   wsSta.getCell('E4').value = 'Total Biz Days:';
+  wsSta.getCell('E4').font = { name: FONT_NAME, bold: true, size: 10.5 };
   wsSta.getCell('F4').value = totalDays;
-  wsSta.getCell('F4').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: YELLOW_FILL } };
+  wsSta.getCell('F4').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFC000' } };
+  wsSta.getCell('F4').font = { name: FONT_NAME, bold: true };
+  wsSta.getCell('F4').alignment = { horizontal: 'center' };
   wsSta.getCell('G4').value = '← Change the yellow cells each week. Everything recalculates automatically.';
+  wsSta.getCell('G4').font = { name: FONT_NAME, italic: true, size: 9.5, color: { argb: 'FF666666' } };
   wsSta.mergeCells('G4:M4');
+  wsSta.getRow(4).height = 20;
 
   const staHeaders = ['Chain','Brand','TY Actual\n(To Date)','LY Full Month','Straight-Line\nProjected',
     'SL vs LY\n(Projected Δ)','SL vs LY\n(%)','TY vs LY\n(Actual Δ)','TY vs LY\n(Actual %)',
@@ -198,18 +253,19 @@ async function buildWorkbook(data, daysElapsed, totalDays, monthLabel) {
   staHeaders.forEach((h, i) => {
     const c = wsSta.getCell(5, i + 1);
     c.value = h;
-    c.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEADER_BLUE } };
-    c.alignment = { wrapText: true, horizontal: 'center' };
+    headerStyle(c, 11);
   });
+  wsSta.getRow(5).height = 30;
 
   const chainTotalRow = {}, chainBrandRows = {};
   let row = 6;
+  let zebraToggle = false;
   for (const chain of chains) {
     const brands = Object.keys(data[chain]).sort();
     const firstRow = row;
     for (const brand of brands) {
       const rawR = rawRowMap[chain + '|' + brand];
+      zebraToggle = !zebraToggle;
       wsSta.getCell(row, 1).value = chain;
       wsSta.getCell(row, 2).value = brand;
       wsSta.getCell(row, 3).value = { formula: "'Raw Data'!F" + rawR };
@@ -223,15 +279,24 @@ async function buildWorkbook(data, daysElapsed, totalDays, monthLabel) {
       wsSta.getCell(row, 11).value = daysElapsed;
       wsSta.getCell(row, 12).value = totalDays;
       wsSta.getCell(row, 13).value = { formula: 'IF(D' + row + '=0,"NEW",IF(G' + row + '>=0.05,"▲ AHEAD",IF(G' + row + '<=-0.05,"▼ BEHIND","~ ON TRACK")))' };
+      dataStyle(wsSta.getCell(row, 1), { align: 'left', zebra: zebraToggle });
+      dataStyle(wsSta.getCell(row, 2), { align: 'left', zebra: zebraToggle });
+      dataStyle(wsSta.getCell(row, 3), { align: 'right', zebra: zebraToggle, numFmt: NUM_CASES });
+      dataStyle(wsSta.getCell(row, 4), { align: 'right', zebra: zebraToggle, numFmt: NUM_CASES });
+      dataStyle(wsSta.getCell(row, 5), { align: 'right', zebra: zebraToggle, numFmt: NUM_CASES });
+      dataStyle(wsSta.getCell(row, 6), { align: 'right', zebra: zebraToggle, numFmt: NUM_CASES });
+      dataStyle(wsSta.getCell(row, 7), { align: 'right', zebra: zebraToggle, numFmt: NUM_PCT });
+      dataStyle(wsSta.getCell(row, 8), { align: 'right', zebra: zebraToggle, numFmt: NUM_CASES });
+      dataStyle(wsSta.getCell(row, 9), { align: 'right', zebra: zebraToggle, numFmt: NUM_PCT });
+      dataStyle(wsSta.getCell(row, 10), { align: 'right', zebra: zebraToggle, numFmt: NUM_CASES });
+      dataStyle(wsSta.getCell(row, 11), { align: 'center', zebra: zebraToggle, numFmt: NUM_INT });
+      dataStyle(wsSta.getCell(row, 12), { align: 'center', zebra: zebraToggle, numFmt: NUM_INT });
+      dataStyle(wsSta.getCell(row, 13), { align: 'center', zebra: zebraToggle, bold: true });
       row++;
     }
     const totalRow = row;
     wsSta.getCell(totalRow, 1).value = '  ' + chain + ' — TOTAL';
-    for (let cc = 1; cc <= 13; cc++) {
-      const c = wsSta.getCell(totalRow, cc);
-      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEADER_BLUE } };
-      c.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-    }
+    for (let cc = 1; cc <= 13; cc++) totalStyle(wsSta.getCell(totalRow, cc));
     wsSta.getCell(totalRow, 3).value = { formula: 'SUM(C' + firstRow + ':C' + (totalRow - 1) + ')' };
     wsSta.getCell(totalRow, 4).value = { formula: 'SUM(D' + firstRow + ':D' + (totalRow - 1) + ')' };
     wsSta.getCell(totalRow, 5).value = { formula: 'IF(C' + totalRow + '=0,0,C' + totalRow + '/$D$4*$F$4)' };
@@ -243,9 +308,18 @@ async function buildWorkbook(data, daysElapsed, totalDays, monthLabel) {
     wsSta.getCell(totalRow, 11).value = daysElapsed;
     wsSta.getCell(totalRow, 12).value = totalDays;
     wsSta.getCell(totalRow, 13).value = { formula: 'IF(D' + totalRow + '=0,"NEW",IF(G' + totalRow + '>=0.05,"▲ AHEAD",IF(G' + totalRow + '<=-0.05,"▼ BEHIND","~ ON TRACK")))' };
+    wsSta.getCell(totalRow, 3).numFmt = NUM_CASES;
+    wsSta.getCell(totalRow, 4).numFmt = NUM_CASES;
+    wsSta.getCell(totalRow, 5).numFmt = NUM_CASES;
+    wsSta.getCell(totalRow, 6).numFmt = NUM_CASES;
+    wsSta.getCell(totalRow, 7).numFmt = NUM_PCT;
+    wsSta.getCell(totalRow, 8).numFmt = NUM_CASES;
+    wsSta.getCell(totalRow, 9).numFmt = NUM_PCT;
+    wsSta.getCell(totalRow, 10).numFmt = NUM_CASES;
     chainTotalRow[chain] = totalRow;
     chainBrandRows[chain] = [firstRow, totalRow - 1];
     row = totalRow + 1;
+    zebraToggle = false;
   }
   const lastDetailRow = row - 1;
 
@@ -272,11 +346,13 @@ async function buildWorkbook(data, daysElapsed, totalDays, monthLabel) {
     const rr = 6 + i;
     wsSta.getCell(rr, 18).value = cs.chain;
     wsSta.getCell(rr, 19).value = { formula: 'H' + cs.totalRow };
+    wsSta.getCell(rr, 19).numFmt = NUM_CASES;
   });
   tuSorted.forEach((cs, i) => {
     const rr = 6 + i;
     wsSta.getCell(rr, 20).value = cs.chain;
     wsSta.getCell(rr, 21).value = cs.slPct === null ? 'NEW' : { formula: 'G' + cs.totalRow };
+    if (cs.slPct !== null) wsSta.getCell(rr, 21).numFmt = NUM_PCT;
   });
 
   const brandTotals = {};
@@ -300,52 +376,76 @@ async function buildWorkbook(data, daysElapsed, totalDays, monthLabel) {
     wsSta.getCell(rr, 24).value = { formula: 'SUMIF(B:B,V' + rr + ',D:D)' };
     wsSta.getCell(rr, 25).value = { formula: 'IF(W' + rr + '=0,0,W' + rr + '/$D$4*$F$4)' };
     wsSta.getCell(rr, 26).value = { formula: 'IF(X' + rr + '=0,"NEW",(Y' + rr + '-X' + rr + ')/X' + rr + ')' };
+    wsSta.getCell(rr, 23).numFmt = NUM_CASES;
+    wsSta.getCell(rr, 24).numFmt = NUM_CASES;
+    wsSta.getCell(rr, 25).numFmt = NUM_CASES;
+    wsSta.getCell(rr, 26).numFmt = NUM_PCT;
   });
 
   [['A',22],['B',26],['C',12],['D',12],['E',14],['F',12],['G',10],['H',12],['I',10],['J',12],['K',10],['L',10],['M',14]]
     .forEach(([col,w]) => wsSta.getColumn(col).width = w);
   for (let cidx = 18; cidx <= 26; cidx++) wsSta.getColumn(colLetter(cidx)).width = 0.5;
 
+  wsSta.views = [{ state: 'frozen', xSplit: 2, ySplit: 5 }];
+  wsSta.autoFilter = { from: 'A5', to: 'M' + lastDetailRow };
+  wsSta.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, printTitlesRow: '5:5', margins: { left: 0.4, right: 0.4, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 } };
+  wsSta.headerFooter = { oddFooter: '&LGenerated ' + new Date().toLocaleString() + '&CSales Trend Analysis&RPage &P of &N' };
+
   const nAccounts = chains.length;
   const nBrands = brandList.length;
 
   // ---------------- Dashboard ----------------
   wsDb.getCell('A1').value = '📊  Sales Dashboard — ' + monthLabel + '   |   ' + daysElapsed + ' of ' + totalDays + ' Selling Days';
-  wsDb.getCell('A1').font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 14 };
-  wsDb.getCell('A1').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEADER_BLUE } };
+  wsDb.getCell('A1').font = { name: FONT_NAME, bold: true, color: { argb: 'FFFFFFFF' }, size: 14 };
+  wsDb.getCell('A1').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
+  wsDb.getCell('A1').alignment = { vertical: 'middle' };
   wsDb.mergeCells('A1:K1');
   wsDb.getCell('L1').value = 'Account Ranking — Straight-Line vs LY';
-  wsDb.getCell('L1').font = { bold: true };
+  wsDb.getCell('L1').font = { name: FONT_NAME, bold: true, size: 11 };
   wsDb.mergeCells('L1:O1');
   wsDb.getCell('A2').value = 'Summary performance across all accounts — updates automatically when Raw Data changes';
+  wsDb.getCell('A2').font = { name: FONT_NAME, size: 10, italic: true, color: { argb: 'FF666666' } };
   wsDb.mergeCells('A2:K2');
   wsDb.getCell('L2').value = 'Sorted best to worst';
+  wsDb.getCell('L2').font = { name: FONT_NAME, size: 9.5, italic: true, color: { argb: 'FF666666' } };
   wsDb.mergeCells('L2:O2');
   wsDb.getCell('A3').value = 'Business Days Elapsed: ' + daysElapsed + ' of ' + totalDays + '   |   Straight-Line = (TY ÷ ' + daysElapsed + ') × ' + totalDays + '   |   ' + monthLabel;
+  wsDb.getCell('A3').font = { name: FONT_NAME, size: 10, color: { argb: 'FF666666' } };
   wsDb.mergeCells('A3:K3');
   wsDb.getCell('L3').value = 'Green = Above LY  |  Red = Below LY';
+  wsDb.getCell('L3').font = { name: FONT_NAME, size: 9.5, color: { argb: 'FF666666' } };
   wsDb.mergeCells('L3:O3');
+  wsDb.getRow(1).height = 22;
 
   const summaryHeaders = { 1: 'Total TY\n(To Date)', 3: 'Total LY\n(Full Month)', 5: 'SL Projected\n(Full Month)', 7: 'SL vs LY\n(Cases Δ)', 9: 'SL vs LY\n(%)' };
-  for (const k in summaryHeaders) { const c = wsDb.getCell(5, +k); c.value = summaryHeaders[k]; c.font = { bold: true }; }
+  for (const k in summaryHeaders) { const c = wsDb.getCell(5, +k); c.value = summaryHeaders[k]; c.font = { name: FONT_NAME, bold: true, size: 10.5 }; c.alignment = { wrapText: true, horizontal: 'center' }; }
   ['Rank','Account','SL% vs LY','Trend'].forEach((h, i) => {
     const c = wsDb.getCell(5, 12 + i);
-    c.value = h; c.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEADER_BLUE } };
+    c.value = h; headerStyle(c, 10.5);
   });
+  wsDb.getRow(5).height = 28;
 
   wsDb.getCell('A6').value = { formula: "SUMIF('Sales Trend Analysis'!B6:B" + lastDetailRow + ",\"<>\"&\"\",'Sales Trend Analysis'!C6:C" + lastDetailRow + ")" };
   wsDb.getCell('C6').value = { formula: "SUMIF('Sales Trend Analysis'!B6:B" + lastDetailRow + ",\"<>\"&\"\",'Sales Trend Analysis'!D6:D" + lastDetailRow + ")" };
   wsDb.getCell('E6').value = { formula: "SUMIF('Sales Trend Analysis'!B6:B" + lastDetailRow + ",\"<>\"&\"\",'Sales Trend Analysis'!E6:E" + lastDetailRow + ")" };
   wsDb.getCell('G6').value = { formula: "SUMIF('Sales Trend Analysis'!B6:B" + lastDetailRow + ",\"<>\"&\"\",'Sales Trend Analysis'!F6:F" + lastDetailRow + ")" };
   wsDb.getCell('I6').value = { formula: 'IF(C6=0,0,G6/C6)' };
+  [1,3,5,7].forEach(c => { wsDb.getCell(6, c).font = { name: FONT_NAME, bold: true, size: 13, color: { argb: NAVY } }; wsDb.getCell(6, c).numFmt = NUM_CASES; wsDb.getCell(6, c).alignment = { horizontal: 'right' }; });
+  wsDb.getCell('I6').font = { name: FONT_NAME, bold: true, size: 13, color: { argb: NAVY } };
+  wsDb.getCell('I6').numFmt = NUM_PCT;
+  wsDb.getCell('I6').alignment = { horizontal: 'right' };
 
   for (let i = 0; i < nAccounts; i++) {
     const rr = 6 + i;
+    const zebra = (i % 2 === 1);
     wsDb.getCell(rr, 12).value = i + 1;
     wsDb.getCell(rr, 13).value = { formula: "'Sales Trend Analysis'!T" + rr };
     wsDb.getCell(rr, 14).value = { formula: "'Sales Trend Analysis'!U" + rr };
     wsDb.getCell(rr, 15).value = { formula: "IF('Sales Trend Analysis'!U" + rr + '="NEW","NEW",IF(\'Sales Trend Analysis\'!U' + rr + '>0,"▲","▼"))' };
+    dataStyle(wsDb.getCell(rr, 12), { align: 'center', zebra });
+    dataStyle(wsDb.getCell(rr, 13), { align: 'left', zebra });
+    dataStyle(wsDb.getCell(rr, 14), { align: 'right', zebra, numFmt: NUM_PCT });
+    dataStyle(wsDb.getCell(rr, 15), { align: 'center', zebra, bold: true });
     const helperCell = wsDb.getCell(rr, 16);
     helperCell.value = { formula: 'IF(ISNUMBER(N' + rr + '),N' + rr + ',IF(N' + rr + '="NEW",999,-999))' };
     helperCell.font = { color: { argb: 'FFFFFFFF' }, size: 1 };
@@ -353,22 +453,27 @@ async function buildWorkbook(data, daysElapsed, totalDays, monthLabel) {
   wsDb.getColumn('P').width = 0.5;
 
   wsDb.getCell('A9').value = '🏆  TOP 10 ACCOUNTS  (Cases vs LY)';
-  wsDb.getCell('A9').font = { bold: true };
+  wsDb.getCell('A9').font = { name: FONT_NAME, bold: true, size: 11, color: { argb: NAVY } };
   wsDb.getCell('F9').value = '⚠️  BOTTOM 10 ACCOUNTS  (Cases vs LY)';
-  wsDb.getCell('F9').font = { bold: true };
-  ['Rank','Account','TY Cases','Cases vs LY'].forEach((h, i) => { wsDb.getCell(10, i + 1).value = h; wsDb.getCell(10, i + 1).font = { bold: true }; });
-  ['Rank','Account','TY Cases','Cases vs LY'].forEach((h, i) => { wsDb.getCell(10, i + 6).value = h; wsDb.getCell(10, i + 6).font = { bold: true }; });
+  wsDb.getCell('F9').font = { name: FONT_NAME, bold: true, size: 11, color: { argb: NEGATIVE_FONT } };
+  ['Rank','Account','TY Cases','Cases vs LY'].forEach((h, i) => { const c = wsDb.getCell(10, i + 1); c.value = h; headerStyle(c, 10); });
+  ['Rank','Account','TY Cases','Cases vs LY'].forEach((h, i) => { const c = wsDb.getCell(10, i + 6); c.value = h; headerStyle(c, 10); });
 
   const top10 = rsSorted.slice(0, 10);
   const bottom10 = rsSorted.length >= 10 ? rsSorted.slice(-10).reverse() : [...rsSorted].reverse();
   for (let i = 0; i < 10; i++) {
     const rr = 11 + i;
+    const zebra = (i % 2 === 1);
     if (i < top10.length) {
       const cs = top10[i];
       wsDb.getCell(rr, 1).value = i + 1;
       wsDb.getCell(rr, 2).value = cs.chain;
       wsDb.getCell(rr, 3).value = { formula: "'Sales Trend Analysis'!C" + cs.totalRow };
       wsDb.getCell(rr, 4).value = { formula: "'Sales Trend Analysis'!H" + cs.totalRow };
+      dataStyle(wsDb.getCell(rr, 1), { align: 'center', zebra });
+      dataStyle(wsDb.getCell(rr, 2), { align: 'left', zebra });
+      dataStyle(wsDb.getCell(rr, 3), { align: 'right', zebra, numFmt: NUM_CASES });
+      dataStyle(wsDb.getCell(rr, 4), { align: 'right', zebra, numFmt: NUM_CASES });
     }
     if (i < bottom10.length) {
       const cs = bottom10[i];
@@ -376,34 +481,49 @@ async function buildWorkbook(data, daysElapsed, totalDays, monthLabel) {
       wsDb.getCell(rr, 7).value = cs.chain;
       wsDb.getCell(rr, 8).value = { formula: "'Sales Trend Analysis'!C" + cs.totalRow };
       wsDb.getCell(rr, 9).value = { formula: "'Sales Trend Analysis'!H" + cs.totalRow };
+      dataStyle(wsDb.getCell(rr, 6), { align: 'center', zebra });
+      dataStyle(wsDb.getCell(rr, 7), { align: 'left', zebra });
+      dataStyle(wsDb.getCell(rr, 8), { align: 'right', zebra, numFmt: NUM_CASES });
+      dataStyle(wsDb.getCell(rr, 9), { align: 'right', zebra, numFmt: NUM_CASES });
     }
   }
 
   const brandStart = 25;
   wsDb.getCell(brandStart - 2, 1).value = '🍷  BRAND PERFORMANCE  (Ranked by SL Projected)';
-  wsDb.getCell(brandStart - 2, 1).font = { bold: true };
+  wsDb.getCell(brandStart - 2, 1).font = { name: FONT_NAME, bold: true, size: 11, color: { argb: NAVY } };
   ['Rank','Brand','TY Cases','LY Cases','SL Projected','SL vs LY %'].forEach((h, i) => {
     const c = wsDb.getCell(brandStart - 1, i + 1);
-    c.value = h; c.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEADER_BLUE } };
+    c.value = h; headerStyle(c, 10.5);
   });
   brandList.forEach((b, i) => {
     const rr = brandStart + i;
     const staRow = 6 + i;
+    const zebra = (i % 2 === 1);
     wsDb.getCell(rr, 1).value = i + 1;
     wsDb.getCell(rr, 2).value = { formula: "'Sales Trend Analysis'!V" + staRow };
     wsDb.getCell(rr, 3).value = { formula: "'Sales Trend Analysis'!W" + staRow };
     wsDb.getCell(rr, 4).value = { formula: "'Sales Trend Analysis'!X" + staRow };
     wsDb.getCell(rr, 5).value = { formula: "'Sales Trend Analysis'!Y" + staRow };
     wsDb.getCell(rr, 6).value = { formula: "'Sales Trend Analysis'!Z" + staRow };
+    dataStyle(wsDb.getCell(rr, 1), { align: 'center', zebra });
+    dataStyle(wsDb.getCell(rr, 2), { align: 'left', zebra });
+    dataStyle(wsDb.getCell(rr, 3), { align: 'right', zebra, numFmt: NUM_CASES });
+    dataStyle(wsDb.getCell(rr, 4), { align: 'right', zebra, numFmt: NUM_CASES });
+    dataStyle(wsDb.getCell(rr, 5), { align: 'right', zebra, numFmt: NUM_CASES });
+    dataStyle(wsDb.getCell(rr, 6), { align: 'right', zebra, numFmt: NUM_PCT });
     const helperCell = wsDb.getCell(rr, 9);
     helperCell.value = { formula: 'IF(ISNUMBER(F' + rr + '),F' + rr + ',IF(F' + rr + '="NEW",999,-999))' };
     helperCell.font = { color: { argb: 'FFFFFFFF' }, size: 1 };
   });
   wsDb.getColumn('I').width = 0.5;
 
-  [['A',10],['B',22],['C',12],['D',14],['E',8],['F',22],['G',12],['H',14],['I',0.5],['J',2],['K',8],['L',22],['M',12],['N',10],['O',14]]
+  [['A',10],['B',22],['C',12],['D',14],['E',16],['F',22],['G',14],['H',14],['I',0.5],['J',2],['K',8],['L',22],['M',12],['N',10],['O',14]]
     .forEach(([col,w]) => wsDb.getColumn(col).width = w);
+
+  wsDb.views = [{ state: 'frozen', ySplit: 5 }];
+  if (nAccounts) wsDb.autoFilter = { from: 'L5', to: 'O' + (5 + nAccounts) }; // Excel allows only one AutoFilter range per sheet
+  wsDb.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, margins: { left: 0.4, right: 0.4, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 } };
+  wsDb.headerFooter = { oddFooter: '&LGenerated ' + new Date().toLocaleString() + '&CSales Dashboard&RPage &P of &N' };
 
   // ---- conditional formatting, opaque colors only, one definition per range ----
   function addThreeState(ref, gtFormula, ltFormula, midFormula) {
@@ -431,8 +551,10 @@ async function buildWorkbook(data, daysElapsed, totalDays, monthLabel) {
 
   // ---------------- Legend ----------------
   wsLegend.getCell('A1').value = 'Legend & Instructions';
-  wsLegend.getCell('A1').font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 14 };
-  wsLegend.getCell('A1').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEADER_BLUE } };
+  wsLegend.getCell('A1').font = { name: FONT_NAME, bold: true, color: { argb: 'FFFFFFFF' }, size: 14 };
+  wsLegend.getCell('A1').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
+  wsLegend.getCell('A1').alignment = { vertical: 'middle' };
+  wsLegend.getRow(1).height = 22;
   const legendLines = [
     '▲ AHEAD = SL Projected is 5% or more above LY',
     '▼ BEHIND = SL Projected is 5% or more below LY',
@@ -442,8 +564,23 @@ async function buildWorkbook(data, daysElapsed, totalDays, monthLabel) {
     'Update D4 (Days Elapsed) and F4 (Total Biz Days) on Sales Trend Analysis each week — everything else recalculates.',
     'This workbook is fully regenerated each week from the raw export. Do not hand-edit formulas; re-run the generator instead.'
   ];
-  legendLines.forEach((line, i) => { wsLegend.getCell(i + 3, 1).value = line; });
+  legendLines.forEach((line, i) => {
+    const c = wsLegend.getCell(i + 3, 1);
+    c.value = line;
+    c.font = { name: FONT_NAME, size: 10.5, color: { argb: DARK_TEXT } };
+  });
   wsLegend.getColumn('A').width = 100;
+  wsLegend.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
+
+  // ---------------- workbook metadata ----------------
+  wb.creator = 'Andrew Monroe';
+  wb.lastModifiedBy = 'Andrew Monroe';
+  wb.company = 'Delicato Family Wines';
+  wb.title = 'Gainers & Drainers — ' + monthLabel;
+  wb.subject = 'Michigan Chain Account Sales Performance';
+  wb.keywords = 'Delicato, Alliance Beverage, Sales Dashboard, ' + monthLabel;
+  wb.created = new Date();
+  wb.modified = new Date();
 
   wb.views = [{ activeTab: 0 }];
   return wb;
