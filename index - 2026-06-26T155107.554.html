@@ -1,0 +1,497 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Gainers &amp; Drainers — Rebuild</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+<style>
+  body { font-family: -apple-system, Segoe UI, sans-serif; max-width: 640px; margin: 60px auto; color: #1f2937; padding: 0 16px; }
+  h1 { font-size: 1.4rem; }
+  label { display: block; margin-top: 18px; font-weight: 600; font-size: 0.9rem; }
+  input[type=file], input[type=text], input[type=number] {
+    width: 100%; padding: 8px; margin-top: 6px; box-sizing: border-box;
+    border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.95rem;
+  }
+  button {
+    margin-top: 24px; padding: 10px 22px; background: #1F3864; color: white;
+    border: none; border-radius: 6px; font-size: 1rem; cursor: pointer;
+  }
+  button:hover { background: #2E75B6; }
+  button:disabled { background: #94a3b8; cursor: not-allowed; }
+  .row { display: flex; gap: 16px; }
+  .row > div { flex: 1; }
+  .error { color: #C00000; margin-top: 16px; font-weight: 600; white-space: pre-wrap; }
+  .success { color: #375623; margin-top: 16px; font-weight: 600; }
+  .hint { color: #64748b; font-size: 0.85rem; margin-top: 4px; }
+</style>
+</head>
+<body>
+  <h1>📊 Gainers &amp; Drainers — Rebuild</h1>
+  <p>Upload the new raw export. Everything runs in your browser — nothing is uploaded anywhere. The workbook is fully regenerated from scratch (Raw Data, Sales Trend Analysis, Dashboard, Legend) each time.</p>
+
+  <div id="message"></div>
+
+  <label>Raw export file (.xlsx or .csv)</label>
+  <input type="file" id="rawFile" accept=".xlsx,.csv" required>
+  <div class="hint">Standard format: data starts row 4, col B=Chain, C=Brand, E=LY, F=TY, G=Variance.</div>
+
+  <div class="row">
+    <div>
+      <label>Days Elapsed</label>
+      <input type="number" id="daysElapsed" required>
+    </div>
+    <div>
+      <label>Total Business Days</label>
+      <input type="number" id="totalDays" required>
+    </div>
+  </div>
+
+  <label>Month label (e.g. Jun-2026)</label>
+  <input type="text" id="monthLabel" required>
+
+  <button id="rebuildBtn">Rebuild workbook</button>
+
+<script>
+const GREEN_FILL='FFE2EFDA', GREEN_FONT='FF375623';
+const RED_FILL='FFFCE4D6', RED_FONT='FFC00000';
+const YELLOW_FILL='FFFFF2CC', YELLOW_FONT='FF7F6000';
+const HEADER_BLUE='FF1F3864';
+
+document.getElementById('monthLabel').value = (() => {
+  const d = new Date();
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return months[d.getMonth()] + '-' + d.getFullYear();
+})();
+
+function showMessage(text, type) {
+  const el = document.getElementById('message');
+  el.innerHTML = '<div class="' + type + '">' + text + '</div>';
+}
+
+function colLetter(n) {
+  let s = '';
+  while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); }
+  return s;
+}
+
+async function readRawRows(file) {
+  const name = file.name.toLowerCase();
+  if (name.endsWith('.csv')) {
+    const text = await file.text();
+    const lines = text.split(/\r?\n/).filter(l => l.length);
+    const rows = lines.map(l => l.split(',').map(c => c.replace(/^"|"$/g, '').trim()));
+    return rows.slice(3); // data starts row 4 (1-indexed) -> skip first 3
+  } else {
+    const buf = await file.arrayBuffer();
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buf);
+    const ws = wb.worksheets[0];
+    const rows = [];
+    ws.eachRow({ includeEmpty: true }, (row, rowNumber) => {
+      if (rowNumber < 4) return;
+      const vals = [];
+      for (let c = 1; c <= 7; c++) {
+        const cell = row.getCell(c);
+        vals.push(cell.value && cell.value.result !== undefined ? cell.value.result : cell.value);
+      }
+      rows.push(vals);
+    });
+    return rows;
+  }
+}
+
+function parseRawExport(rows) {
+  const data = {};
+  for (const r of rows) {
+    if (!r || r.length < 6) continue;
+    const chain = r[1], brand = r[2];
+    if (!chain || !brand) continue;
+    const brandStr = String(brand).trim();
+    const bLower = brandStr.toLowerCase();
+    if (bLower === 'total' || bLower === 'totals' || bLower === '' || bLower.endsWith('total')) continue;
+    const chainStr = String(chain).trim();
+    const ly = (r[4] === null || r[4] === undefined || r[4] === '') ? 0 : parseFloat(r[4]) || 0;
+    const ty = (r[5] === null || r[5] === undefined || r[5] === '') ? 0 : parseFloat(r[5]) || 0;
+    if (!data[chainStr]) data[chainStr] = {};
+    if (!data[chainStr][brandStr]) data[chainStr][brandStr] = { ly: 0, ty: 0 };
+    data[chainStr][brandStr].ly += ly;
+    data[chainStr][brandStr].ty += ty;
+  }
+  return data;
+}
+
+function checkNoOverlappingMerges(ws) {
+  const ranges = ws.model.merges || [];
+  function parse(rng) {
+    const [a, b] = rng.split(':');
+    const m1 = a.match(/([A-Z]+)(\d+)/), m2 = b.match(/([A-Z]+)(\d+)/);
+    const colNum = (s) => { let n = 0; for (const ch of s) n = n * 26 + (ch.charCodeAt(0) - 64); return n; };
+    return { minRow: +m1[2], maxRow: +m2[2], minCol: colNum(m1[1]), maxCol: colNum(m2[1]) };
+  }
+  const parsed = ranges.map(parse);
+  for (let i = 0; i < parsed.length; i++) {
+    for (let j = i + 1; j < parsed.length; j++) {
+      const a = parsed[i], b = parsed[j];
+      const overlap = !(a.maxRow < b.minRow || b.maxRow < a.minRow || a.maxCol < b.minCol || b.maxCol < a.minCol);
+      if (overlap) throw new Error('Overlapping merges detected: ' + ranges[i] + ' vs ' + ranges[j]);
+    }
+  }
+}
+
+async function buildWorkbook(data, daysElapsed, totalDays, monthLabel) {
+  const wb = new ExcelJS.Workbook();
+  const wsDb = wb.addWorksheet('Dashboard');
+  const wsSta = wb.addWorksheet('Sales Trend Analysis');
+  const wsLegend = wb.addWorksheet('Legend & Instructions');
+  const wsRaw = wb.addWorksheet('Raw Data');
+
+  const chains = Object.keys(data).sort();
+
+  // ---------------- Raw Data ----------------
+  wsRaw.getCell('A1').value = '⬇  PASTE YOUR NEW DATA HERE  —  Delete rows 3 onward, paste Values Only starting at A3';
+  wsRaw.getCell('A1').font = { bold: true, color: { argb: 'FFB45F06' } };
+  const rawHeaders = ['Month', 'Chain', 'Brand', 'Metrics', 'LY Cases', 'TY Cases', 'Variance'];
+  rawHeaders.forEach((h, i) => { const c = wsRaw.getCell(2, i + 1); c.value = h; c.font = { bold: true }; });
+
+  const rawRowMap = {};
+  let r = 3;
+  for (const chain of chains) {
+    for (const brand of Object.keys(data[chain]).sort()) {
+      const { ly, ty } = data[chain][brand];
+      wsRaw.getCell(r, 1).value = monthLabel;
+      wsRaw.getCell(r, 2).value = chain;
+      wsRaw.getCell(r, 3).value = brand;
+      wsRaw.getCell(r, 5).value = ly;
+      wsRaw.getCell(r, 6).value = ty;
+      wsRaw.getCell(r, 7).value = Math.round((ty - ly) * 10000) / 10000;
+      rawRowMap[chain + '|' + brand] = r;
+      r++;
+    }
+  }
+  [['A',10],['B',22],['C',26],['D',10],['E',10],['F',10],['G',10]].forEach(([col,w]) => wsRaw.getColumn(col).width = w);
+
+  // ---------------- Sales Trend Analysis ----------------
+  wsSta.getCell('A1').value = 'Sales Trend Analysis — Straight-Line Projection';
+  wsSta.getCell('A1').font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 14 };
+  wsSta.getCell('A1').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEADER_BLUE } };
+  wsSta.mergeCells('A1:M1');
+
+  const today = new Date();
+  const todayStr = today.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+  wsSta.getCell('A2').value = 'Month: ' + monthLabel + '   |   Business Days Elapsed: ' + daysElapsed + ' of ' + totalDays + '   |   Today: ' + todayStr;
+  wsSta.mergeCells('A2:M2');
+  wsSta.mergeCells('A3:M3');
+
+  wsSta.getCell('A4').value = '⚙  UPDATE HERE EACH WEEK →';
+  wsSta.mergeCells('A4:C4');
+  wsSta.getCell('D4').value = daysElapsed;
+  wsSta.getCell('D4').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: YELLOW_FILL } };
+  wsSta.getCell('E4').value = 'Total Biz Days:';
+  wsSta.getCell('F4').value = totalDays;
+  wsSta.getCell('F4').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: YELLOW_FILL } };
+  wsSta.getCell('G4').value = '← Change the yellow cells each week. Everything recalculates automatically.';
+  wsSta.mergeCells('G4:M4');
+
+  const staHeaders = ['Chain','Brand','TY Actual\n(To Date)','LY Full Month','Straight-Line\nProjected',
+    'SL vs LY\n(Projected Δ)','SL vs LY\n(%)','TY vs LY\n(Actual Δ)','TY vs LY\n(Actual %)',
+    'Daily Run Rate\n(TY)','Days Elapsed','Total Biz Days','Status'];
+  staHeaders.forEach((h, i) => {
+    const c = wsSta.getCell(5, i + 1);
+    c.value = h;
+    c.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEADER_BLUE } };
+    c.alignment = { wrapText: true, horizontal: 'center' };
+  });
+
+  const chainTotalRow = {}, chainBrandRows = {};
+  let row = 6;
+  for (const chain of chains) {
+    const brands = Object.keys(data[chain]).sort();
+    const firstRow = row;
+    for (const brand of brands) {
+      const rawR = rawRowMap[chain + '|' + brand];
+      wsSta.getCell(row, 1).value = chain;
+      wsSta.getCell(row, 2).value = brand;
+      wsSta.getCell(row, 3).value = { formula: "'Raw Data'!F" + rawR };
+      wsSta.getCell(row, 4).value = { formula: "'Raw Data'!E" + rawR };
+      wsSta.getCell(row, 5).value = { formula: 'IF(C' + row + '=0,0,C' + row + '/$D$4*$F$4)' };
+      wsSta.getCell(row, 6).value = { formula: 'E' + row + '-D' + row };
+      wsSta.getCell(row, 7).value = { formula: 'IF(D' + row + '=0,"",F' + row + '/D' + row + ')' };
+      wsSta.getCell(row, 8).value = { formula: 'C' + row + '-D' + row };
+      wsSta.getCell(row, 9).value = { formula: 'IF(D' + row + '=0,"",H' + row + '/D' + row + ')' };
+      wsSta.getCell(row, 10).value = { formula: 'C' + row + '/$D$4' };
+      wsSta.getCell(row, 11).value = daysElapsed;
+      wsSta.getCell(row, 12).value = totalDays;
+      wsSta.getCell(row, 13).value = { formula: 'IF(D' + row + '=0,"NEW",IF(G' + row + '>=0.05,"▲ AHEAD",IF(G' + row + '<=-0.05,"▼ BEHIND","~ ON TRACK")))' };
+      row++;
+    }
+    const totalRow = row;
+    wsSta.getCell(totalRow, 1).value = '  ' + chain + ' — TOTAL';
+    for (let cc = 1; cc <= 13; cc++) {
+      const c = wsSta.getCell(totalRow, cc);
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEADER_BLUE } };
+      c.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    }
+    wsSta.getCell(totalRow, 3).value = { formula: 'SUM(C' + firstRow + ':C' + (totalRow - 1) + ')' };
+    wsSta.getCell(totalRow, 4).value = { formula: 'SUM(D' + firstRow + ':D' + (totalRow - 1) + ')' };
+    wsSta.getCell(totalRow, 5).value = { formula: 'IF(C' + totalRow + '=0,0,C' + totalRow + '/$D$4*$F$4)' };
+    wsSta.getCell(totalRow, 6).value = { formula: 'E' + totalRow + '-D' + totalRow };
+    wsSta.getCell(totalRow, 7).value = { formula: 'IF(D' + totalRow + '=0,"",F' + totalRow + '/D' + totalRow + ')' };
+    wsSta.getCell(totalRow, 8).value = { formula: 'C' + totalRow + '-D' + totalRow };
+    wsSta.getCell(totalRow, 9).value = { formula: 'IF(D' + totalRow + '=0,"",H' + totalRow + '/D' + totalRow + ')' };
+    wsSta.getCell(totalRow, 10).value = { formula: 'C' + totalRow + '/$D$4' };
+    wsSta.getCell(totalRow, 11).value = daysElapsed;
+    wsSta.getCell(totalRow, 12).value = totalDays;
+    wsSta.getCell(totalRow, 13).value = { formula: 'IF(D' + totalRow + '=0,"NEW",IF(G' + totalRow + '>=0.05,"▲ AHEAD",IF(G' + totalRow + '<=-0.05,"▼ BEHIND","~ ON TRACK")))' };
+    chainTotalRow[chain] = totalRow;
+    chainBrandRows[chain] = [firstRow, totalRow - 1];
+    row = totalRow + 1;
+  }
+  const lastDetailRow = row - 1;
+
+  // ---- Python-style rankings computed in JS, not in Excel ----
+  const chainStats = chains.map(chain => {
+    const brands = data[chain];
+    let lySum = 0, tySum = 0;
+    for (const b in brands) { lySum += brands[b].ly; tySum += brands[b].ty; }
+    const delta = tySum - lySum;
+    const slPct = lySum === 0 ? null : ((tySum / daysElapsed * totalDays) - lySum) / lySum;
+    return { chain, ly: lySum, ty: tySum, delta, slPct, totalRow: chainTotalRow[chain] };
+  });
+
+  const rsSorted = [...chainStats].sort((a, b) => b.delta - a.delta);
+  const tuSorted = [...chainStats].sort((a, b) => {
+    const aNew = a.slPct === null, bNew = b.slPct === null;
+    if (aNew !== bNew) return aNew ? 1 : -1;
+    return (b.slPct || 0) - (a.slPct || 0);
+  });
+
+  wsSta.getCell(5, 20).value = 'Helper: Chain';
+  wsSta.getCell(5, 21).value = 'Helper: SL%';
+  rsSorted.forEach((cs, i) => {
+    const rr = 6 + i;
+    wsSta.getCell(rr, 18).value = cs.chain;
+    wsSta.getCell(rr, 19).value = { formula: 'H' + cs.totalRow };
+  });
+  tuSorted.forEach((cs, i) => {
+    const rr = 6 + i;
+    wsSta.getCell(rr, 20).value = cs.chain;
+    wsSta.getCell(rr, 21).value = cs.slPct === null ? 'NEW' : { formula: 'G' + cs.totalRow };
+  });
+
+  const brandTotals = {};
+  for (const chain of chains) {
+    for (const brand in data[chain]) {
+      if (!brandTotals[brand]) brandTotals[brand] = { ly: 0, ty: 0 };
+      brandTotals[brand].ly += data[chain][brand].ly;
+      brandTotals[brand].ty += data[chain][brand].ty;
+    }
+  }
+  const brandList = Object.keys(brandTotals).map(brand => {
+    const v = brandTotals[brand];
+    const sl = v.ty ? (v.ty / daysElapsed * totalDays) : 0;
+    return { brand, ty: v.ty, ly: v.ly, sl };
+  }).sort((a, b) => b.sl - a.sl);
+
+  brandList.forEach((b, i) => {
+    const rr = 6 + i;
+    wsSta.getCell(rr, 22).value = b.brand;
+    wsSta.getCell(rr, 23).value = { formula: 'SUMIF(B:B,V' + rr + ',C:C)' };
+    wsSta.getCell(rr, 24).value = { formula: 'SUMIF(B:B,V' + rr + ',D:D)' };
+    wsSta.getCell(rr, 25).value = { formula: 'IF(W' + rr + '=0,0,W' + rr + '/$D$4*$F$4)' };
+    wsSta.getCell(rr, 26).value = { formula: 'IF(X' + rr + '=0,"NEW",(Y' + rr + '-X' + rr + ')/X' + rr + ')' };
+  });
+
+  [['A',22],['B',26],['C',12],['D',12],['E',14],['F',12],['G',10],['H',12],['I',10],['J',12],['K',10],['L',10],['M',14]]
+    .forEach(([col,w]) => wsSta.getColumn(col).width = w);
+  for (let cidx = 18; cidx <= 26; cidx++) wsSta.getColumn(colLetter(cidx)).width = 0.5;
+
+  const nAccounts = chains.length;
+  const nBrands = brandList.length;
+
+  // ---------------- Dashboard ----------------
+  wsDb.getCell('A1').value = '📊  Sales Dashboard — ' + monthLabel + '   |   ' + daysElapsed + ' of ' + totalDays + ' Selling Days';
+  wsDb.getCell('A1').font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 14 };
+  wsDb.getCell('A1').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEADER_BLUE } };
+  wsDb.mergeCells('A1:K1');
+  wsDb.getCell('L1').value = 'Account Ranking — Straight-Line vs LY';
+  wsDb.getCell('L1').font = { bold: true };
+  wsDb.mergeCells('L1:O1');
+  wsDb.getCell('A2').value = 'Summary performance across all accounts — updates automatically when Raw Data changes';
+  wsDb.mergeCells('A2:K2');
+  wsDb.getCell('L2').value = 'Sorted best to worst';
+  wsDb.mergeCells('L2:O2');
+  wsDb.getCell('A3').value = 'Business Days Elapsed: ' + daysElapsed + ' of ' + totalDays + '   |   Straight-Line = (TY ÷ ' + daysElapsed + ') × ' + totalDays + '   |   ' + monthLabel;
+  wsDb.mergeCells('A3:K3');
+  wsDb.getCell('L3').value = 'Green = Above LY  |  Red = Below LY';
+  wsDb.mergeCells('L3:O3');
+
+  const summaryHeaders = { 1: 'Total TY\n(To Date)', 3: 'Total LY\n(Full Month)', 5: 'SL Projected\n(Full Month)', 7: 'SL vs LY\n(Cases Δ)', 9: 'SL vs LY\n(%)' };
+  for (const k in summaryHeaders) { const c = wsDb.getCell(5, +k); c.value = summaryHeaders[k]; c.font = { bold: true }; }
+  ['Rank','Account','SL% vs LY','Trend'].forEach((h, i) => {
+    const c = wsDb.getCell(5, 12 + i);
+    c.value = h; c.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEADER_BLUE } };
+  });
+
+  wsDb.getCell('A6').value = { formula: "SUMIF('Sales Trend Analysis'!B6:B" + lastDetailRow + ",\"<>\"&\"\",'Sales Trend Analysis'!C6:C" + lastDetailRow + ")" };
+  wsDb.getCell('C6').value = { formula: "SUMIF('Sales Trend Analysis'!B6:B" + lastDetailRow + ",\"<>\"&\"\",'Sales Trend Analysis'!D6:D" + lastDetailRow + ")" };
+  wsDb.getCell('E6').value = { formula: "SUMIF('Sales Trend Analysis'!B6:B" + lastDetailRow + ",\"<>\"&\"\",'Sales Trend Analysis'!E6:E" + lastDetailRow + ")" };
+  wsDb.getCell('G6').value = { formula: "SUMIF('Sales Trend Analysis'!B6:B" + lastDetailRow + ",\"<>\"&\"\",'Sales Trend Analysis'!F6:F" + lastDetailRow + ")" };
+  wsDb.getCell('I6').value = { formula: 'IF(C6=0,0,G6/C6)' };
+
+  for (let i = 0; i < nAccounts; i++) {
+    const rr = 6 + i;
+    wsDb.getCell(rr, 12).value = i + 1;
+    wsDb.getCell(rr, 13).value = { formula: "'Sales Trend Analysis'!T" + rr };
+    wsDb.getCell(rr, 14).value = { formula: "'Sales Trend Analysis'!U" + rr };
+    wsDb.getCell(rr, 15).value = { formula: "IF('Sales Trend Analysis'!U" + rr + '="NEW","NEW",IF(\'Sales Trend Analysis\'!U' + rr + '>0,"▲","▼"))' };
+    const helperCell = wsDb.getCell(rr, 16);
+    helperCell.value = { formula: 'IF(ISNUMBER(N' + rr + '),N' + rr + ',IF(N' + rr + '="NEW",999,-999))' };
+    helperCell.font = { color: { argb: 'FFFFFFFF' }, size: 1 };
+  }
+  wsDb.getColumn('P').width = 0.5;
+
+  wsDb.getCell('A9').value = '🏆  TOP 10 ACCOUNTS  (Cases vs LY)';
+  wsDb.getCell('A9').font = { bold: true };
+  wsDb.getCell('F9').value = '⚠️  BOTTOM 10 ACCOUNTS  (Cases vs LY)';
+  wsDb.getCell('F9').font = { bold: true };
+  ['Rank','Account','TY Cases','Cases vs LY'].forEach((h, i) => { wsDb.getCell(10, i + 1).value = h; wsDb.getCell(10, i + 1).font = { bold: true }; });
+  ['Rank','Account','TY Cases','Cases vs LY'].forEach((h, i) => { wsDb.getCell(10, i + 6).value = h; wsDb.getCell(10, i + 6).font = { bold: true }; });
+
+  const top10 = rsSorted.slice(0, 10);
+  const bottom10 = rsSorted.length >= 10 ? rsSorted.slice(-10).reverse() : [...rsSorted].reverse();
+  for (let i = 0; i < 10; i++) {
+    const rr = 11 + i;
+    if (i < top10.length) {
+      const cs = top10[i];
+      wsDb.getCell(rr, 1).value = i + 1;
+      wsDb.getCell(rr, 2).value = cs.chain;
+      wsDb.getCell(rr, 3).value = { formula: "'Sales Trend Analysis'!C" + cs.totalRow };
+      wsDb.getCell(rr, 4).value = { formula: "'Sales Trend Analysis'!H" + cs.totalRow };
+    }
+    if (i < bottom10.length) {
+      const cs = bottom10[i];
+      wsDb.getCell(rr, 6).value = rsSorted.length >= 10 ? (rsSorted.length - 9 + i) : (i + 1);
+      wsDb.getCell(rr, 7).value = cs.chain;
+      wsDb.getCell(rr, 8).value = { formula: "'Sales Trend Analysis'!C" + cs.totalRow };
+      wsDb.getCell(rr, 9).value = { formula: "'Sales Trend Analysis'!H" + cs.totalRow };
+    }
+  }
+
+  const brandStart = 25;
+  wsDb.getCell(brandStart - 2, 1).value = '🍷  BRAND PERFORMANCE  (Ranked by SL Projected)';
+  wsDb.getCell(brandStart - 2, 1).font = { bold: true };
+  ['Rank','Brand','TY Cases','LY Cases','SL Projected','SL vs LY %'].forEach((h, i) => {
+    const c = wsDb.getCell(brandStart - 1, i + 1);
+    c.value = h; c.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEADER_BLUE } };
+  });
+  brandList.forEach((b, i) => {
+    const rr = brandStart + i;
+    const staRow = 6 + i;
+    wsDb.getCell(rr, 1).value = i + 1;
+    wsDb.getCell(rr, 2).value = { formula: "'Sales Trend Analysis'!V" + staRow };
+    wsDb.getCell(rr, 3).value = { formula: "'Sales Trend Analysis'!W" + staRow };
+    wsDb.getCell(rr, 4).value = { formula: "'Sales Trend Analysis'!X" + staRow };
+    wsDb.getCell(rr, 5).value = { formula: "'Sales Trend Analysis'!Y" + staRow };
+    wsDb.getCell(rr, 6).value = { formula: "'Sales Trend Analysis'!Z" + staRow };
+    const helperCell = wsDb.getCell(rr, 9);
+    helperCell.value = { formula: 'IF(ISNUMBER(F' + rr + '),F' + rr + ',IF(F' + rr + '="NEW",999,-999))' };
+    helperCell.font = { color: { argb: 'FFFFFFFF' }, size: 1 };
+  });
+  wsDb.getColumn('I').width = 0.5;
+
+  [['A',10],['B',22],['C',12],['D',14],['E',8],['F',22],['G',12],['H',14],['I',0.5],['J',2],['K',8],['L',22],['M',12],['N',10],['O',14]]
+    .forEach(([col,w]) => wsDb.getColumn(col).width = w);
+
+  // ---- conditional formatting, opaque colors only, one definition per range ----
+  function addThreeState(ref, gtFormula, ltFormula, midFormula) {
+    wsDb.addConditionalFormatting({
+      ref,
+      rules: [
+        { type: 'expression', formulae: [gtFormula], style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: GREEN_FILL } }, font: { color: { argb: GREEN_FONT } } }, priority: 1 },
+        { type: 'expression', formulae: [ltFormula], style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: RED_FILL } }, font: { color: { argb: RED_FONT } } }, priority: 2 },
+        { type: 'expression', formulae: [midFormula], style: { fill: { type: 'pattern', pattern: 'solid', bgColor: { argb: YELLOW_FILL } }, font: { color: { argb: YELLOW_FONT } } }, priority: 3 }
+      ]
+    });
+  }
+  if (nBrands) {
+    addThreeState('H' + brandStart + ':H' + (brandStart + nBrands - 1),
+      'I' + brandStart + '>=0.05',
+      'AND(I' + brandStart + '<=-0.05,I' + brandStart + '<>999)',
+      'OR(AND(I' + brandStart + '>-0.05,I' + brandStart + '<0.05),I' + brandStart + '=999)');
+  }
+  if (nAccounts) {
+    addThreeState('L6:O' + (5 + nAccounts), '$P6>0', 'AND($P6<=0,$P6<>999)', '$P6=999');
+  }
+
+  checkNoOverlappingMerges(wsDb);
+  checkNoOverlappingMerges(wsSta);
+
+  // ---------------- Legend ----------------
+  wsLegend.getCell('A1').value = 'Legend & Instructions';
+  wsLegend.getCell('A1').font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 14 };
+  wsLegend.getCell('A1').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: HEADER_BLUE } };
+  const legendLines = [
+    '▲ AHEAD = SL Projected is 5% or more above LY',
+    '▼ BEHIND = SL Projected is 5% or more below LY',
+    '~ ON TRACK = within ±5% of LY',
+    'NEW = no LY data for this account/brand',
+    'Straight-Line Projected = (TY To Date ÷ Days Elapsed) × Total Business Days',
+    'Update D4 (Days Elapsed) and F4 (Total Biz Days) on Sales Trend Analysis each week — everything else recalculates.',
+    'This workbook is fully regenerated each week from the raw export. Do not hand-edit formulas; re-run the generator instead.'
+  ];
+  legendLines.forEach((line, i) => { wsLegend.getCell(i + 3, 1).value = line; });
+  wsLegend.getColumn('A').width = 100;
+
+  wb.views = [{ activeTab: 0 }];
+  return wb;
+}
+
+document.getElementById('rebuildBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('rebuildBtn');
+  const fileInput = document.getElementById('rawFile');
+  const daysElapsed = parseInt(document.getElementById('daysElapsed').value, 10);
+  const totalDays = parseInt(document.getElementById('totalDays').value, 10);
+  const monthLabel = document.getElementById('monthLabel').value.trim();
+
+  showMessage('', '');
+
+  if (!fileInput.files.length) { showMessage('Please choose a raw export file first.', 'error'); return; }
+  if (!daysElapsed || !totalDays || daysElapsed <= 0 || totalDays <= 0 || daysElapsed > totalDays) {
+    showMessage('Days Elapsed must be a positive number, no greater than Total Business Days.', 'error'); return;
+  }
+  if (!monthLabel) { showMessage('Please enter a month label.', 'error'); return; }
+
+  btn.disabled = true;
+  btn.textContent = 'Rebuilding…';
+  try {
+    const rows = await readRawRows(fileInput.files[0]);
+    const data = parseRawExport(rows);
+    if (!Object.keys(data).length) {
+      throw new Error('No usable rows found. Check the file matches the standard export format (Chain in col B, Brand in col C, LY in col E, TY in col F, data starting row 4).');
+    }
+    const wb = await buildWorkbook(data, daysElapsed, totalDays, monthLabel);
+    const buffer = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'Gainers_Drainers_' + monthLabel.replace(/\s+/g, '') + '_' + daysElapsed + 'of' + totalDays + '.xlsx';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showMessage('Done — your download should start automatically.', 'success');
+  } catch (e) {
+    showMessage('Error: ' + e.message, 'error');
+    console.error(e);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Rebuild workbook';
+  }
+});
+</script>
+</body>
+</html>
