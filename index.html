@@ -537,7 +537,7 @@ async function buildWorkbook(data, daysElapsed, totalDays, monthLabel) {
     });
   }
   if (nBrands) {
-    addThreeState('H' + brandStart + ':H' + (brandStart + nBrands - 1),
+    addThreeState('F' + brandStart + ':F' + (brandStart + nBrands - 1),
       'I' + brandStart + '>=0.05',
       'AND(I' + brandStart + '<=-0.05,I' + brandStart + '<>999)',
       'OR(AND(I' + brandStart + '>-0.05,I' + brandStart + '<0.05),I' + brandStart + '=999)');
